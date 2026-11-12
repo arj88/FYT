@@ -361,7 +361,7 @@ final class LibraryStore {
             let key = orderKeys[id] ?? 0
             let spot = downloads.firstIndex { (orderKeys[$0.videoId] ?? .infinity) > key } ?? downloads.count
             downloads.insert(song, at: spot)
-            ArtworkStore.prefetch(song.artwork(544))
+            Task { await OfflineArtwork.save(song) }
             persist()
         } catch {
             if Task.isCancelled { return }
@@ -434,6 +434,7 @@ final class LibraryStore {
         for task in downloadTasks.values { task.cancel() }
         downloadTasks = [:]
         try? FileManager.default.removeItem(at: Self.downloadsDirectory)
+        OfflineArtwork.removeAll()
         downloads = []
         downloadStates = [:]
         pendingDownloads = [:]
@@ -441,6 +442,14 @@ final class LibraryStore {
         batchTotal = 0; batchDone = 0; batchFailed = 0
         downloadNotice = nil
         persist()
+    }
+
+    /// Saves covers for downloads made before covers were kept with them. Runs while
+    /// online; stops at the first failure (probably offline) and tries again next launch.
+    func saveMissingArtwork() async {
+        for song in downloads where OfflineArtwork.url(for: song.videoId) == nil {
+            guard await OfflineArtwork.save(song) else { return }
+        }
     }
 
     /// Space the downloaded songs take up.
@@ -461,6 +470,7 @@ final class LibraryStore {
 
     func removeDownload(_ song: Song) {
         if let url = Self.downloadURL(for: song.videoId) { try? FileManager.default.removeItem(at: url) }
+        OfflineArtwork.remove(song.videoId)
         downloads.removeAll { $0.videoId == song.videoId }
         downloadStates[song.videoId] = nil
         persist()

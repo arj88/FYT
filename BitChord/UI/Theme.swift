@@ -16,7 +16,55 @@ extension Song {
     /// Artwork for any song, including imported files.
     func artworkURL(_ size: Int) -> URL? {
         if isLocal { return LocalMetadata.artworkURL(for: self) }
+        // Downloaded songs use their saved cover, so it shows offline too.
+        if let saved = OfflineArtwork.url(for: videoId) { return saved }
         return artwork(size)
+    }
+}
+
+/// Cover art saved alongside downloaded songs (Documents/Artwork/<videoId>.jpg).
+enum OfflineArtwork {
+    nonisolated(unsafe) private static var known: Set<String> = loadKnown()
+    private static let lock = NSLock()
+
+    static var directory: URL { LibraryStore.documents.appendingPathComponent("Artwork", isDirectory: true) }
+
+    private static func file(_ videoId: String) -> URL {
+        directory.appendingPathComponent(videoId.replacingOccurrences(of: "/", with: "_") + ".jpg")
+    }
+
+    private static func loadKnown() -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return Set(names.filter { $0.hasSuffix(".jpg") }.map { String($0.dropLast(4)) })
+    }
+
+    static func url(for videoId: String) -> URL? {
+        lock.lock(); defer { lock.unlock() }
+        return known.contains(videoId.replacingOccurrences(of: "/", with: "_")) ? file(videoId) : nil
+    }
+
+    /// Downloads and keeps a song's cover. Returns false if it couldn't be fetched (e.g. offline).
+    @discardableResult
+    static func save(_ song: Song) async -> Bool {
+        if url(for: song.videoId) != nil { return true }
+        guard let remote = song.artwork(720),
+              let data = try? await ArtworkStore.session.data(from: remote).0,
+              let image = UIImage(data: data),
+              let jpeg = image.jpegData(compressionQuality: 0.85) else { return false }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard (try? jpeg.write(to: file(song.videoId), options: .atomic)) != nil else { return false }
+        lock.lock(); known.insert(song.videoId.replacingOccurrences(of: "/", with: "_")); lock.unlock()
+        return true
+    }
+
+    static func remove(_ videoId: String) {
+        try? FileManager.default.removeItem(at: file(videoId))
+        lock.lock(); known.remove(videoId.replacingOccurrences(of: "/", with: "_")); lock.unlock()
+    }
+
+    static func removeAll() {
+        try? FileManager.default.removeItem(at: directory)
+        lock.lock(); known.removeAll(); lock.unlock()
     }
 }
 

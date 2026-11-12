@@ -85,6 +85,7 @@ struct BitChordApp: App {
                 .tint(Theme.accent)
                 .onOpenURL { router.handle(url: $0, player: player) }
                 .task { await account.restore() }
+                .task { await library.saveMissingArtwork() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { player.persistNow() }
