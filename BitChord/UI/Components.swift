@@ -405,6 +405,7 @@ struct DownloadAllButton: View {
         let list = (requested ?? songs).filter { !$0.isLocal }
         let done = library.downloadedCount(list)
         let active = library.activeDownloads(list)
+        let failed = library.failedCount(list)
         let allDone = !list.isEmpty && done == list.count && !fetching
         Button {
             Task {
@@ -425,6 +426,9 @@ struct DownloadAllButton: View {
                 } else if active > 0 {
                     ProgressView().controlSize(.small)
                     Text("Downloading… \(done) of \(list.count)")
+                } else if failed > 0 {
+                    Image(systemName: "arrow.clockwise.circle")
+                    Text("Retry \(failed) failed")
                 } else if allDone {
                     Image(systemName: "checkmark.circle.fill")
                     Text("Downloaded")

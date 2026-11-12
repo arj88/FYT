@@ -3,6 +3,8 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppRouter.self) private var router
     @Environment(PlayerController.self) private var player
+    /// Height of the mini player (and download bar), so lists can scroll their last row above it.
+    @State private var accessoryHeight: CGFloat = 0
 
     var body: some View {
         @Bindable var router = router
@@ -10,28 +12,32 @@ struct RootView: View {
             NavigationStack(path: $router.homePath) {
                 HomeView().withRoutes()
             }
-            .safeAreaInset(edge: .bottom) { BottomAccessory() }
+            .overlay(alignment: .bottom) { BottomAccessory(height: $accessoryHeight) }
+            .contentMargins(.bottom, accessoryHeight + 8, for: .scrollContent)
             .tabItem { Label("Home", systemImage: "house.fill") }
             .tag(AppTab.home)
 
             NavigationStack(path: $router.explorePath) {
                 ExploreView().withRoutes()
             }
-            .safeAreaInset(edge: .bottom) { BottomAccessory() }
+            .overlay(alignment: .bottom) { BottomAccessory(height: $accessoryHeight) }
+            .contentMargins(.bottom, accessoryHeight + 8, for: .scrollContent)
             .tabItem { Label("Explore", systemImage: "square.grid.2x2.fill") }
             .tag(AppTab.explore)
 
             NavigationStack(path: $router.libraryPath) {
                 LibraryView().withRoutes()
             }
-            .safeAreaInset(edge: .bottom) { BottomAccessory() }
+            .overlay(alignment: .bottom) { BottomAccessory(height: $accessoryHeight) }
+            .contentMargins(.bottom, accessoryHeight + 8, for: .scrollContent)
             .tabItem { Label("Library", systemImage: "music.note.list") }
             .tag(AppTab.library)
 
             NavigationStack(path: $router.searchPath) {
                 SearchView().withRoutes()
             }
-            .safeAreaInset(edge: .bottom) { BottomAccessory() }
+            .overlay(alignment: .bottom) { BottomAccessory(height: $accessoryHeight) }
+            .contentMargins(.bottom, accessoryHeight + 8, for: .scrollContent)
             .tabItem { Label("Search", systemImage: "magnifyingglass") }
             .tag(AppTab.search)
         }
@@ -119,11 +125,13 @@ struct MiniPlayer: View {
 /// What sits above the tab bar: download progress (when there is any) and the mini player.
 struct BottomAccessory: View {
     @Environment(LibraryStore.self) private var library
+    @Binding var height: CGFloat
     var body: some View {
         VStack(spacing: 6) {
             DownloadStatusBar()
             MiniPlayer()
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: library.isDownloading)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: library.downloadNotice)
     }

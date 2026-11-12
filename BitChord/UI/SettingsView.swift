@@ -8,6 +8,8 @@ struct SettingsView: View {
 
     @State private var sheet: Sheet?
     @State private var cacheSize: Int64 = 0
+    @State private var downloadsSize: Int64 = 0
+    @State private var confirmDeleteDownloads = false
 
     enum Sheet: String, Identifiable { case youtube, discord, lastfm, listenbrainz; var id: String { rawValue } }
 
@@ -141,6 +143,10 @@ struct SettingsView: View {
                     ForEach([256, 512, 1024, 2048, 4096], id: \.self) { Text(ByteCountFormatter.string(fromByteCount: Int64($0) * 1024 * 1024, countStyle: .file)).tag($0) }
                 }
                 Button("Clear Cache") { AudioCache.clear(); cacheSize = 0 }
+                LabeledContent("Downloads",
+                               value: "\(library.downloads.count) songs · " + ByteCountFormatter.string(fromByteCount: downloadsSize, countStyle: .file))
+                Button("Delete All Downloads", role: .destructive) { confirmDeleteDownloads = true }
+                    .disabled(library.downloads.isEmpty && library.pendingDownloads.isEmpty)
                 Toggle("Pause listening history", isOn: $settings.pauseHistory)
                 Button("Clear History", role: .destructive) { library.clearHistory() }
             }
@@ -153,7 +159,20 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .environment(\.editMode, .constant(.inactive))
-        .task { cacheSize = await Task.detached { AudioCache.size() }.value }
+        .task {
+            cacheSize = await Task.detached { AudioCache.size() }.value
+            downloadsSize = await Task.detached { LibraryStore.downloadsSize() }.value
+        }
+        .confirmationDialog("Delete all \(library.downloads.count) downloaded songs?",
+                            isPresented: $confirmDeleteDownloads, titleVisibility: .visible) {
+            Button("Delete All Downloads", role: .destructive) {
+                library.removeAllDownloads()
+                downloadsSize = 0
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+        } message: {
+            Text("They'll be removed from this iPhone. You can download them again any time.")
+        }
         .sheet(item: $sheet) { which in
             switch which {
             case .youtube: YouTubeLoginView()

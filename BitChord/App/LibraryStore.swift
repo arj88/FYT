@@ -49,11 +49,17 @@ final class LibraryStore {
         var searchHistory: [String] = []
         var downloads: [Song] = []
         var localSongs: [Song] = []
+        /// Downloads that failed, kept so they can be retried after a relaunch.
+        var failedDownloads: [Song]? = nil
     }
 
     private var saveTask: Task<Void, Never>?
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var runningDownloads = 0
+    /// Where each queued song belongs in Downloads: newest batch first, and inside a
+    /// batch the order of the playlist it came from (not the order downloads finish in).
+    @ObservationIgnored private var orderKeys: [String: Double] = [:]
+    @ObservationIgnored private var batchCounter = 0
 
     // The current batch of downloads, for the progress bar and the "done" notification.
     private(set) var batchTotal = 0
@@ -126,17 +132,33 @@ final class LibraryStore {
             searchHistory = snap.searchHistory
             downloads = snap.downloads
             localSongs = snap.localSongs
+            for song in snap.failedDownloads ?? [] where Self.downloadURL(for: song.videoId) == nil {
+                downloadStates[song.videoId] = .failed("Download failed")
+                pendingDownloads[song.videoId] = song
+            }
         }
         for song in downloads where Self.downloadURL(for: song.videoId) != nil {
             downloadStates[song.videoId] = .done
         }
         downloads.removeAll { downloadStates[$0.videoId] != .done }
+        // Earlier versions listed downloads newest-finished first (roughly reversed).
+        // Once, put the ones that are liked back into Liked Songs order.
+        if !UserDefaults.standard.bool(forKey: "downloadsOrderFixed") {
+            UserDefaults.standard.set(true, forKey: "downloadsOrderFixed")
+            var position: [String: Int] = [:]
+            for (i, song) in liked.enumerated() where position[song.videoId] == nil { position[song.videoId] = i }
+            downloads = downloads.enumerated()
+                .sorted { (position[$0.element.videoId] ?? Int.max, $0.offset) < (position[$1.element.videoId] ?? Int.max, $1.offset) }
+                .map(\.element)
+            persist()
+        }
     }
 
     private func persist() {
         saveTask?.cancel()
         let snap = Snapshot(liked: liked, playlists: playlists, saved: saved, history: history,
-                            searchHistory: searchHistory, downloads: downloads, localSongs: localSongs)
+                            searchHistory: searchHistory, downloads: downloads, localSongs: localSongs,
+                            failedDownloads: failedDownloads)
         saveTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
@@ -281,7 +303,11 @@ final class LibraryStore {
 
     func download(_ songs: [Song]) {
         var added: [Song] = []
+        batchCounter += 1
+        var place = 0
         for song in songs where !song.isLocal && downloadStates[song.videoId] != .done && downloadTasks[song.videoId] == nil {
+            orderKeys[song.videoId] = Double(-batchCounter) * 1_000_000 + Double(place)
+            place += 1
             downloadStates[song.videoId] = .queued
             pendingDownloads[song.videoId] = song
             added.append(song)
@@ -331,13 +357,17 @@ final class LibraryStore {
             batchDone += 1
             finishBatchIfDone()
             downloads.removeAll { $0.videoId == id }
-            downloads.insert(song, at: 0)
+            // Older downloads have no key and sort after anything queued this session.
+            let key = orderKeys[id] ?? 0
+            let spot = downloads.firstIndex { (orderKeys[$0.videoId] ?? .infinity) > key } ?? downloads.count
+            downloads.insert(song, at: spot)
             ArtworkStore.prefetch(song.artwork(544))
             persist()
         } catch {
             if Task.isCancelled { return }
             downloadStates[id] = .failed(error.localizedDescription)
             batchFailed += 1
+            persist()
             finishBatchIfDone()
         }
         downloadTasks[id] = nil
@@ -369,6 +399,58 @@ final class LibraryStore {
         downloadStates[song.videoId] = nil
         pendingDownloads[song.videoId] = nil
         if wasActive && batchTotal > 0 { batchTotal -= 1; finishBatchIfDone() }
+        persist()
+    }
+
+    /// Songs whose download failed, in the order they were asked for.
+    var failedDownloads: [Song] {
+        pendingDownloads.values
+            .filter { if case .failed = downloadStates[$0.videoId] { return true }; return false }
+            .sorted { (orderKeys[$0.videoId] ?? .infinity, $0.title) < (orderKeys[$1.videoId] ?? .infinity, $1.title) }
+    }
+
+    /// Songs queued or downloading right now, in download order.
+    var activeDownloadSongs: [Song] {
+        pendingDownloads.values
+            .filter {
+                switch downloadStates[$0.videoId] {
+                case .queued, .downloading: return true
+                default: return false
+                }
+            }
+            .sorted { (orderKeys[$0.videoId] ?? .infinity, $0.title) < (orderKeys[$1.videoId] ?? .infinity, $1.title) }
+    }
+
+    func failedCount(_ songs: [Song]) -> Int {
+        songs.filter { if case .failed = downloadStates[$0.videoId] { return true }; return false }.count
+    }
+
+    func retryAllFailed() {
+        download(failedDownloads)
+    }
+
+    /// Removes every downloaded song, and stops anything still downloading.
+    func removeAllDownloads() {
+        for task in downloadTasks.values { task.cancel() }
+        downloadTasks = [:]
+        try? FileManager.default.removeItem(at: Self.downloadsDirectory)
+        downloads = []
+        downloadStates = [:]
+        pendingDownloads = [:]
+        orderKeys = [:]
+        batchTotal = 0; batchDone = 0; batchFailed = 0
+        downloadNotice = nil
+        persist()
+    }
+
+    /// Space the downloaded songs take up.
+    nonisolated static func downloadsSize() -> Int64 {
+        guard let files = FileManager.default.enumerator(at: downloadsDirectory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in files {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
     }
 
     func retryDownload(_ song: Song) {
