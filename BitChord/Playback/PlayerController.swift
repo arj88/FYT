@@ -1186,6 +1186,7 @@ final class PlayerController {
     private func loadArtwork(for song: Song) {
         artworkTask?.cancel()
         nowPlayingArtwork = nil
+        Task.detached(priority: .utility) { await OfflineArtwork.remember(song) }
         artworkTask = Task {
             guard let image = await ArtworkStore.image(for: song.artworkURL(544)) else { return }
             guard !Task.isCancelled, self.current?.videoId == song.videoId else { return }

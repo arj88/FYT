@@ -169,7 +169,7 @@ struct SongCollectionView: View {
         let all: [Song]
         switch kind {
         case .liked: all = library.liked
-        case .downloads: all = library.downloads
+        case .downloads: all = sortedDownloads
         case .history: all = library.history.map(\.song)
         case .local: all = library.localSongs
         }
@@ -228,6 +228,18 @@ struct SongCollectionView: View {
         .task { if kind == .liked { await account.syncLikes(force: false) } }
         .refreshable { if kind == .liked { await account.syncLikes() } }
         .toolbar {
+            if kind == .downloads && !library.downloads.isEmpty {
+                Menu {
+                    Picker("Sort By", selection: Bindable(AppSettings.shared).downloadsSort) {
+                        ForEach(DownloadsSort.allCases) { option in
+                            Label(option.label, systemImage: option.icon).tag(option)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
+                .accessibilityLabel("Sort")
+            }
             if kind == .history && !library.history.isEmpty {
                 Button("Clear") { library.clearHistory() }
             }
@@ -242,6 +254,33 @@ struct SongCollectionView: View {
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { Task { await library.importFiles(urls) } }
+        }
+    }
+
+    /// Downloads in the order picked from the sort button.
+    private var sortedDownloads: [Song] {
+        let downloads = library.downloads   // newest batch first
+        switch AppSettings.shared.downloadsSort {
+        case .recent:
+            return downloads
+        case .title:
+            return downloads.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .artist:
+            return downloads.sorted {
+                let a = $0.artist.localizedStandardCompare($1.artist)
+                return a == .orderedSame ? $0.title.localizedStandardCompare($1.title) == .orderedAscending : a == .orderedAscending
+            }
+        case .playlist:
+            // Liked Songs order first, then your playlists in order, then anything else.
+            var position: [String: Int] = [:]
+            var next = 0
+            for song in library.liked + library.playlists.flatMap(\.songs) where position[song.videoId] == nil {
+                position[song.videoId] = next
+                next += 1
+            }
+            return downloads.enumerated()
+                .sorted { (position[$0.element.videoId] ?? Int.max, $0.offset) < (position[$1.element.videoId] ?? Int.max, $1.offset) }
+                .map(\.element)
         }
     }
 

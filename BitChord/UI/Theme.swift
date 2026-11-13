@@ -22,49 +22,99 @@ extension Song {
     }
 }
 
-/// Cover art saved alongside downloaded songs (Documents/Artwork/<videoId>.jpg).
+/// Cover art kept on the phone so it shows offline:
+/// - downloaded songs: Documents/Artwork/<videoId>.jpg, kept as long as the download;
+/// - songs you've played: Caches/RecentArtwork/<videoId>.jpg, the newest 400 kept
+///   (iOS may clear Caches when storage runs low; they come back on the next play).
 enum OfflineArtwork {
-    nonisolated(unsafe) private static var known: Set<String> = loadKnown()
     private static let lock = NSLock()
+    nonisolated(unsafe) private static var downloaded: Set<String> = names(in: directory)
+    nonisolated(unsafe) private static var recent: Set<String> = names(in: recentDirectory)
+    private static let recentLimit = 400
 
     static var directory: URL { LibraryStore.documents.appendingPathComponent("Artwork", isDirectory: true) }
-
-    private static func file(_ videoId: String) -> URL {
-        directory.appendingPathComponent(videoId.replacingOccurrences(of: "/", with: "_") + ".jpg")
+    static var recentDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("RecentArtwork", isDirectory: true)
     }
 
-    private static func loadKnown() -> Set<String> {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        return Set(names.filter { $0.hasSuffix(".jpg") }.map { String($0.dropLast(4)) })
+    private static func key(_ videoId: String) -> String { videoId.replacingOccurrences(of: "/", with: "_") }
+    private static func names(in dir: URL) -> Set<String> {
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return Set(files.filter { $0.hasSuffix(".jpg") }.map { String($0.dropLast(4)) })
     }
 
     static func url(for videoId: String) -> URL? {
+        let k = key(videoId)
         lock.lock(); defer { lock.unlock() }
-        return known.contains(videoId.replacingOccurrences(of: "/", with: "_")) ? file(videoId) : nil
+        if downloaded.contains(k) { return directory.appendingPathComponent(k + ".jpg") }
+        if recent.contains(k) { return recentDirectory.appendingPathComponent(k + ".jpg") }
+        return nil
     }
 
-    /// Downloads and keeps a song's cover. Returns false if it couldn't be fetched (e.g. offline).
+    /// Keeps a downloaded song's cover for as long as the download. False if it couldn't be fetched.
     @discardableResult
     static func save(_ song: Song) async -> Bool {
-        if url(for: song.videoId) != nil { return true }
-        guard let remote = song.artwork(720),
-              let data = try? await ArtworkStore.session.data(from: remote).0,
-              let image = UIImage(data: data),
-              let jpeg = image.jpegData(compressionQuality: 0.85) else { return false }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        guard (try? jpeg.write(to: file(song.videoId), options: .atomic)) != nil else { return false }
-        lock.lock(); known.insert(song.videoId.replacingOccurrences(of: "/", with: "_")); lock.unlock()
+        if isDownloaded(song.videoId) { return true }
+        // Reuse the copy kept from playing it, if there is one.
+        let k = key(song.videoId)
+        let kept = recentDirectory.appendingPathComponent(k + ".jpg")
+        let data: Data?
+        if FileManager.default.fileExists(atPath: kept.path) {
+            data = try? Data(contentsOf: kept)
+        } else {
+            data = await fetch(song)
+        }
+        guard let data, write(data, to: directory, name: k) else { return false }
+        lock.lock(); downloaded.insert(k); lock.unlock()
         return true
     }
 
+    /// Keeps the cover of a song that's been played, for Recently Played and the player offline.
+    static func remember(_ song: Song) async {
+        guard !song.isLocal, url(for: song.videoId) == nil, let data = await fetch(song) else { return }
+        let k = key(song.videoId)
+        guard write(data, to: recentDirectory, name: k) else { return }
+        lock.lock(); recent.insert(k); let count = recent.count; lock.unlock()
+        if count > recentLimit + 50 { trimRecent() }
+    }
+
     static func remove(_ videoId: String) {
-        try? FileManager.default.removeItem(at: file(videoId))
-        lock.lock(); known.remove(videoId.replacingOccurrences(of: "/", with: "_")); lock.unlock()
+        let k = key(videoId)
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(k + ".jpg"))
+        lock.lock(); downloaded.remove(k); lock.unlock()
     }
 
     static func removeAll() {
         try? FileManager.default.removeItem(at: directory)
-        lock.lock(); known.removeAll(); lock.unlock()
+        lock.lock(); downloaded.removeAll(); lock.unlock()
+    }
+
+    private static func isDownloaded(_ videoId: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return downloaded.contains(key(videoId))
+    }
+
+    private static func fetch(_ song: Song) async -> Data? {
+        guard let remote = song.artwork(720),
+              let data = try? await ArtworkStore.session.data(from: remote).0,
+              let image = UIImage(data: data) else { return nil }
+        return image.jpegData(compressionQuality: 0.85)
+    }
+
+    private static func write(_ data: Data, to dir: URL, name: String) -> Bool {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return (try? data.write(to: dir.appendingPathComponent(name + ".jpg"), options: .atomic)) != nil
+    }
+
+    /// Drops the oldest kept covers of played songs.
+    private static func trimRecent() {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: recentDirectory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let dated = files.map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
+        for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).dropLast(recentLimit) {
+            try? fm.removeItem(at: file)
+            lock.lock(); recent.remove(file.deletingPathExtension().lastPathComponent); lock.unlock()
+        }
     }
 }
 

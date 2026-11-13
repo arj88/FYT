@@ -447,9 +447,11 @@ final class LibraryStore {
     /// Saves covers for downloads made before covers were kept with them. Runs while
     /// online; stops at the first failure (probably offline) and tries again next launch.
     func saveMissingArtwork() async {
-        for song in downloads where OfflineArtwork.url(for: song.videoId) == nil {
+        for song in downloads {
             guard await OfflineArtwork.save(song) else { return }
         }
+        // And Recently Played, for songs played before covers were kept.
+        for entry in history.prefix(30) { await OfflineArtwork.remember(entry.song) }
     }
 
     /// Space the downloaded songs take up.

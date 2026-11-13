@@ -182,7 +182,7 @@ struct ShelfCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ArtworkImage(url: item.artwork(Int(width * 3)), cornerRadius: item.kind == .artist ? width / 2 : Theme.cardCorner,
+            ArtworkImage(url: item.videoId.flatMap(OfflineArtwork.url(for:)) ?? item.artwork(Int(width * 3)), cornerRadius: item.kind == .artist ? width / 2 : Theme.cardCorner,
                          circle: item.kind == .artist)
                 .frame(width: width, height: item.isVideo ? width * 9 / 16 : width)
             VStack(alignment: item.kind == .artist ? .center : .leading, spacing: 1) {

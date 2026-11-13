@@ -72,6 +72,28 @@ extension Color {
     }
 }
 
+/// How the Downloads list is ordered.
+enum DownloadsSort: String, CaseIterable, Identifiable {
+    case playlist, recent, title, artist
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .playlist: "Playlist Order"
+        case .recent: "Recently Downloaded"
+        case .title: "Title"
+        case .artist: "Artist"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .playlist: "list.number"
+        case .recent: "clock"
+        case .title: "textformat"
+        case .artist: "music.mic"
+        }
+    }
+}
+
 enum RepeatMode: String, Codable { case off, all, one }
 
 /// User preferences, persisted in UserDefaults (secrets in the Keychain).
@@ -102,6 +124,7 @@ final class AppSettings {
     var showNerdStats: Bool { didSet { d.set(showNerdStats, forKey: "nerdStats") } }
     var contentRegion: String { didSet { d.set(contentRegion, forKey: "region"); InnerTube.shared.region = contentRegion } }
     var pauseHistory: Bool { didSet { d.set(pauseHistory, forKey: "pauseHistory") } }
+    var downloadsSort: DownloadsSort { didSet { d.set(downloadsSort.rawValue, forKey: "downloadsSort") } }
 
     var listenBrainzToken: String? { didSet { Keychain.set(listenBrainzToken, for: "listenbrainz") } }
     var listenBrainzUser: String? { didSet { d.set(listenBrainzUser, forKey: "lbUser") } }
@@ -134,6 +157,7 @@ final class AppSettings {
         showNerdStats = d.bool(forKey: "nerdStats")
         contentRegion = d.string(forKey: "region") ?? InnerTube.shared.region
         pauseHistory = d.bool(forKey: "pauseHistory")
+        downloadsSort = DownloadsSort(rawValue: d.string(forKey: "downloadsSort") ?? "") ?? .playlist
         listenBrainzToken = Keychain.get("listenbrainz")
         listenBrainzUser = d.string(forKey: "lbUser")
         lastFM = Keychain.get("lastfm").flatMap { try? JSONDecoder().decode(LastFM.Config.self, from: Data($0.utf8)) }
