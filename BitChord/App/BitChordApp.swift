@@ -86,6 +86,9 @@ struct BitChordApp: App {
                 .onOpenURL { router.handle(url: $0, player: player) }
                 .task { await account.restore() }
                 .task { await library.saveMissingArtwork() }
+                // Lets Siri know the names of your playlists ("Play Gym Mix on FYT").
+                .task { FYTShortcuts.updateAppShortcutParameters() }
+                .onChange(of: library.playlists.map(\.name)) { _, _ in FYTShortcuts.updateAppShortcutParameters() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { player.persistNow() }
